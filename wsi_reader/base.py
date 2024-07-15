@@ -19,6 +19,7 @@ class FileLike(Protocol):
 class Resolution(Enum):
     LEVEL = auto()
     DOWNSAMPLE = auto()
+    MPP = auto()
 
 
 class Interpolation(Enum):
@@ -104,15 +105,22 @@ class WSIReader(metaclass=ABCMeta):
                 raise ValueError("Level must be an integer")
 
             if downsample_base_res:
-                resolution = self.level_downsamples[resolution]
+                ds = self.level_downsamples[resolution]
                 res = self._read_region_downsample(
-                    x_y, resolution, tile_size, True, interpolation
+                    x_y, ds, tile_size, True, interpolation
                 )
             else:
                 res = self._read_region_level(x_y, resolution, tile_size)
         elif resolution_unit == Resolution.DOWNSAMPLE:
             res = self._read_region_downsample(
                 x_y, resolution, tile_size, downsample_base_res, interpolation
+            )
+        elif resolution_unit == Resolution.MPP:
+            if self.mpp[0] is None:
+                raise ValueError("No mpp information available")
+            ds = resolution / self.mpp[0]
+            res = self._read_region_downsample(
+                x_y, ds, tile_size, downsample_base_res, interpolation
             )
         else:
             raise ValueError("Invalid value for resolution_unit")
