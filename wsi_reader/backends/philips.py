@@ -188,7 +188,7 @@ class IsyntaxReader(WSIReader):
     def mpp(self) -> tuple[Optional[float], Optional[float]]:
         with self._pe_cache.get() as pe:
             view = pe["in"]["WSI"].source_view
-            mpp = view.scale[:2]
+            mpp = tuple(view.scale[:2])
         return mpp
 
     @property
