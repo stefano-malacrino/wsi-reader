@@ -7,4 +7,4 @@ The reader works with all the image formats supported by the installed backends.
 
 To install the package from the latest commit with a desired backend (e.g. tifffile) use the following command:
 
-> pip install "wsi-reader[tifffile] @ https://github.com/stefano-malacrino/wsi-reader.git"
+> pip install "wsi-reader[tifffile] @ git+https://github.com/stefano-malacrino/wsi-reader.git"
