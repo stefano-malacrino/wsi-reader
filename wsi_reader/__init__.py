@@ -24,11 +24,11 @@ def mpp_to_magnification(mpp: float) -> float:
     ]
 
 
-def open_slide(slide_path: PathLike | str | bytes, **reader_kwargs) -> WSIReader:
+def open_slide(slide_path: PathLike | str, **reader_kwargs) -> WSIReader:
     """Opens the slide using an implementation of WSIReader interface based on the image file extension. If no suitable implementation is found an exception is thrown.
 
     Args:
-        slide_path (PathLike | str | bytes): Path of the image file.
+        slide_path (PathLike | str): Path of the image file.
 
     Returns:
         WSIReader: Opened slide.
