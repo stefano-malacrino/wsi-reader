@@ -7,33 +7,27 @@ import zarr
 from fractions import Fraction
 from functools import cached_property
 from os import PathLike
-from typing import Optional
+from typing import IO, Any
 
-from ..base import WSIReader, FileLike
+from ..base import WSIReader
 
 
 class TiffReader(WSIReader):
     """Implementation of the WSIReader interface backed by tifffile."""
 
     def __init__(
-        self, slide: PathLike | str | FileLike, series: int = 0, **kwargs
+        self, slide: str | PathLike[Any] | tifffile.FileHandle | IO[bytes], series: int = 0, **kwargs
     ) -> None:
         """Opens a slide. The object may be used as a context manager, in which case it will be closed upon exiting the context.
 
         Args:
-            slide (PathLike | str | FileLike): Slide to open.
+            slide (str | PathLike[Any] | tifffile.FileHandle | IO[bytes]): Slide to open.
             series (int, optional): For multi-series formats, image series to open. Defaults to 0.
         """
-        self._series = series
-        self._slide = slide
-        self._store: tifffile.ZarrTiffStore = tifffile.imread(slide, aszarr=True, series=series)
-        assert isinstance(self._store, tifffile.ZarrTiffStore)
-        try:
-            self._zarr: zarr.Group = zarr.open(self._store, mode="r")
-            assert isinstance(self._zarr, zarr.Group)
-        except:
-            self._store.close()
-            raise
+        self.series = series
+        self.slide = slide
+        self._store = tifffile.imread(slide, aszarr=True, series=series)
+        self._zarr: zarr.Group = zarr.open(self._store, mode="r")
 
     def close(self) -> None:
         self._store.close()
@@ -76,8 +70,8 @@ class TiffReader(WSIReader):
         return len(self._zarr)
 
     @cached_property
-    def mpp(self) -> tuple[Optional[float], Optional[float]]:
-        mpp: tuple[Optional[float], Optional[float]] = (None, None)
+    def mpp(self) -> tuple[float | None, float | None]:
+        mpp: tuple[float | None, float | None] = (None, None)
         page: tifffile.TiffPage = self._store._data[0].pages[0]
         if page.is_svs:
             metadata = tifffile.tifffile.svs_description_metadata(
@@ -150,7 +144,7 @@ class TiffReader(WSIReader):
         return bounds
     
     def __getstate__(self):
-        return {'slide': self._slide, 'series': self._series}
+        return {'slide': self.slide, 'series': self.series}
     
     def __setstate__(self, state):
         self.__init__(state['slide'], series=state['series'])
