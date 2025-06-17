@@ -11,14 +11,14 @@ from ..base import WSIReader
 class OpenslideReader(WSIReader):
     """Implementation of the WSIReader interface backed by openslide"""
 
-    def __init__(self, slide_path: PathLike | str | bytes, **kwargs) -> None:
+    def __init__(self, slide_path: PathLike | str, **kwargs) -> None:
         """Opens a slide. The object may be used as a context manager, in which case it will be closed upon exiting the context.
 
         Args:
             slide_path (PathLike | str): Path of the slide to open.
         """
 
-        self._slide_path = slide_path
+        self.slide_path = slide_path
         self._slide = openslide.open_slide(str(slide_path))
 
     def close(self) -> None:
@@ -46,7 +46,7 @@ class OpenslideReader(WSIReader):
         return self._slide.level_count
 
     @cached_property
-    def mpp(self) -> tuple[Optional[float], Optional[float]]:
+    def mpp(self) -> tuple[float | None, float | None]:
         mpp_x = self._slide.properties.get("openslide.mpp-x")
         mpp_x = mpp_x and float(mpp_x)
         mpp_y = self._slide.properties.get("openslide.mpp-y")
@@ -106,7 +106,7 @@ class OpenslideReader(WSIReader):
         return bounds
 
     def __getstate__(self):
-        return {"slide_path": self._slide_path}
+        return {"slide_path": self.slide_path}
 
     def __setstate__(self, state):
         self.__init__(state["slide_path"])
