@@ -1,11 +1,10 @@
 import numpy as np
 
+from collections.abc import Generator
 from contextlib import contextmanager
 from functools import cached_property
 from os import PathLike
-from pathlib import Path
 from queue import Queue
-from typing import Generator, Optional
 
 from pixelengine import PixelEngine
 from softwarerendercontext import SoftwareRenderContext
@@ -61,8 +60,7 @@ class IsyntaxReader(WSIReader):
     def __init__(
         self,
         slide: FileLike | PathLike | str,
-        cache_path: Optional[PathLike | str] = "",
-        generate_cache: bool = False,
+        cache_path: PathLike | str | None = "",
         pe_cache_size: int = 8,
         **kwargs
     ) -> None:
@@ -70,56 +68,29 @@ class IsyntaxReader(WSIReader):
 
         Args:
             slide (FileLike | PathLike | str): Slide to open.
-            cache_path (Optional[PathLike | str], optional): Path to the cache for the image. If it's a path to a folder the file name is assumed to be the same as the image. If an empty string the path is set to the directory where the image is stored. If None and generate_cache is False caching is disabled. Defaults to "".
-            generate_cache (bool, optional): If True create the cache file if not present. Defaults to False.
-            pe_cache_size (Optional[int], optional): Size of cache of PixelEngine handles (used for thread-safety). If None size is set to number of CPUs. Defaults to None.
+            cache_path (PathLike | str | None, optional): Path to the cache for the image. If it's a path to a folder the file name is assumed to be the same as the image. If an empty string the path is set to the directory where the image is stored. If None caching is disabled. Defaults to "".
+            pe_cache_size (int, optional): Size of cache of PixelEngine handles (used for thread-safety). Defaults to 8.
         """
 
-        if isinstance(slide, FileLike):
-            if not cache_path and generate_cache:
-                raise ValueError(
-                    "If slide is a file-like object and generate_cache=True cache_path must be specified"
-                )
-
-        if (
-            (
-                cache_path == ""
-                and (not isinstance(slide, FileLike))
-                and Path(slide).with_suffix(".fic").exists()
-            )
-            or (
-                cache_path
-                and (
-                    Path(cache_path).is_file()
-                    or (
-                        (not isinstance(slide, FileLike))
-                        and Path(cache_path).is_dir()
-                        and (
-                            Path(cache_path) / Path(slide).with_suffix(".fic").name
-                        ).exists()
-                    )
-                )
-            )
-            or generate_cache
-        ):
-            cache_path = str(cache_path or "")
-            container_name = "caching-ficom"
+        if isinstance(slide, PathLike) or isinstance(slide, str):
+            slide = str(slide)
+            container_name = "caching-ficom" if cache_path is not None else "ficom"
+            cache_path = str(cache_path) if cache_path is not None else ""
         else:
-            cache_path = ""
             container_name = "ficom"
+            cache_path = ""
 
         self._pe_cache = _PixelEngineCache(
             pe_cache_size,
-            str(slide) if not isinstance(slide, FileLike) else slide,
+            slide,
             container_name,
-            str(cache_path),
+            cache_path,
         )
         with self._pe_cache.get() as pe:
             pass
 
-        self._slide = slide
+        self.slide = slide
         self._cache_path = cache_path
-        self._generate_cache = generate_cache
         self._pe_cache_size = pe_cache_size
 
     def close(self) -> None:
@@ -151,14 +122,13 @@ class IsyntaxReader(WSIReader):
                 [view_range],
                 view.data_envelopes(level),
                 True,
-                [255, 255, 255],
+                [255, 255, 255, 0],
                 PixelEngine.BufferType.RGBA,
             )
             (region,) = regions
             pe.wait_all(regions)
             region.get(tile)
         tile.shape = (tile_h, tile_w, 4)
-        tile[:, :, 3][tile[:, :, 3] < 255] = 0
         return tile
 
     @cached_property
@@ -185,11 +155,11 @@ class IsyntaxReader(WSIReader):
         return level_count
 
     @cached_property
-    def mpp(self) -> tuple[Optional[float], Optional[float]]:
+    def mpp(self) -> tuple[float | None, float | None]:
         with self._pe_cache.get() as pe:
             view = pe["in"]["WSI"].source_view
-            mpp = tuple(view.scale[:2])
-        return mpp
+            mpp_x, mpp_y = view.scale[:2]
+        return (mpp_x, mpp_y)
 
     @property
     def dtype(self) -> np.dtype:
@@ -210,7 +180,7 @@ class IsyntaxReader(WSIReader):
             ]
         return tuple(level_downsamples)
 
-    @property
+    @cached_property
     def bounds(self) -> dict:
         with self._pe_cache.get() as pe:
             view = pe["in"]["WSI"].source_view
@@ -236,9 +206,8 @@ class IsyntaxReader(WSIReader):
 
     def __getstate__(self):
         return {
-            "slide": self._slide,
+            "slide": self.slide,
             "cache_path": self._cache_path,
-            "generate_cache": self._generate_cache,
             "pe_cache_size": self._pe_cache_size,
         }
 
@@ -246,6 +215,5 @@ class IsyntaxReader(WSIReader):
         self.__init__(
             state["slide"],
             state["cache_path"],
-            state["generate_cache"],
             state["pe_cache_size"],
         )
