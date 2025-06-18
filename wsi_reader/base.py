@@ -57,6 +57,9 @@ class WSIReader(metaclass=ABCMeta):
             None
         """
         raise NotImplementedError
+    
+    def __eq__(self, other) -> bool:
+        raise NotImplementedError
 
     def __enter__(self) -> "WSIReader":
         return self

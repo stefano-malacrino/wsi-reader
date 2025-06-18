@@ -206,6 +206,9 @@ class IsyntaxReader(WSIReader):
             }
 
         return bounds
+    
+    def __eq__(self, other) -> bool:
+        return isinstance(other, IsyntaxReader) and self.slide == other.slide
 
     def __getstate__(self):
         return {

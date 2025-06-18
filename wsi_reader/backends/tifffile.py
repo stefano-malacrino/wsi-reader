@@ -143,6 +143,9 @@ class TiffReader(WSIReader):
 
         return bounds
     
+    def __eq__(self, other) -> bool:
+        return isinstance(other, TiffReader) and self.slide == other.slide and self.series == other.series
+    
     def __getstate__(self):
         return {'slide': self.slide, 'series': self.series}
     

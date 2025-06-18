@@ -105,6 +105,11 @@ class OpenslideReader(WSIReader):
 
         return bounds
 
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, OpenslideReader) and self.slide_path == other.slide_path
+        )
+
     def __getstate__(self):
         return {"slide_path": self.slide_path}
 
