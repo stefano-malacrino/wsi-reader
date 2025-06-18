@@ -2,17 +2,15 @@ import cv2
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
-from collections.abc import Mapping
 from enum import Enum, auto
-from functools import cached_property
-from os import SEEK_SET
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+from typing_extensions import Buffer
 
 
 @runtime_checkable
 class FileLike(Protocol):
-    def read(self, n: Optional[int]) -> int: ...
-    def seek(self, offset: int, whence: int = SEEK_SET): ...
+    def read(self, n: int | None = ..., /) -> Buffer: ...
+    def seek(self, offset: int, whence: int = ..., /) -> int: ...
     def tell(self) -> int: ...
 
 
@@ -28,31 +26,24 @@ class Interpolation(Enum):
     BICUBIC = cv2.INTER_CUBIC
 
 
-class DownsampleDimensions(Mapping[float, tuple[int, int]]):
-    def __init__(
-        self,
-        level_downsamples: tuple[float, ...],
-        level_dimensions: tuple[tuple[int, int], ...],
-    ):
-        self._level_downsamples = level_downsamples
-        self._level_dimensions = level_dimensions
-        super().__init__()
+def _get_region_coords(
+        start: int, tile_size: int, dim_size: int
+    ) -> tuple[int, int, tuple[int, int]]:
+        end = start + tile_size
+        if start >= dim_size or end <= 0:
+            raise ValueError("Region out of image bounds")
+        pad_start = abs(min(start, 0))
+        start += pad_start
+        pad_end = max(end - dim_size, 0)
+        end -= pad_end
+        tile_size = end - start
+        return start, tile_size, (pad_start, pad_end)
 
-    def __getitem__(self, downsample: float) -> tuple[int, int]:
-        if downsample <= 0:
-            raise ValueError("Invalid downsample factor")
-        try:
-            level = self._level_downsamples.index(downsample)
-            return self._level_dimensions[level]
-        except ValueError:
-            w, h = self._level_dimensions[0]
-            return round(w / downsample), round(h / downsample)
 
-    def __iter__(self):
-        return iter(self._level_downsamples)
-
-    def __len__(self):
-        return len(self._level_downsamples)
+def _normalize(pixels: np.ndarray) -> np.ndarray:
+        if np.issubdtype(pixels.dtype, np.integer):
+            pixels = (pixels / 255).astype(np.float32)
+        return pixels
 
 
 class WSIReader(metaclass=ABCMeta):
@@ -89,8 +80,8 @@ class WSIReader(metaclass=ABCMeta):
             x_y (tuple[int, int]): coordinates of the top left pixel of the region in the specified resolution reference frame.
             resolution (int | float): the desired resolution.
             tile_size (tuple[int, int] | int): size of the region. Can be a tuple in the format (width, height) or a scalar to specify a square region.
-            normalize (bool, optional): True to normalize the pixel values in the range [0,1]. Defaults to False.
-            downsample_base_res (bool, optional): True to render the region by downsampling from the base (highest) resolution. Defaults to False.
+            normalize (bool, optional): True: normalize the pixel values in the range [0,1]. Defaults to False.
+            downsample_base_res (bool, optional): False: render the region by downsampling from the base (highest) resolution. Defaults to False.
             resolution_unit (Resolution): resolution unit. Defaults to Resolution.LEVEL.
             interpolation (Interpolation): interpolation method to use for downsampling. Defaults to Interpolation.BICUBIC.
 
@@ -116,9 +107,10 @@ class WSIReader(metaclass=ABCMeta):
                 x_y, resolution, tile_size, downsample_base_res, interpolation
             )
         elif resolution_unit == Resolution.MPP:
-            if self.mpp[0] is None:
+            mpp = self.mpp[0] or self.mpp[1]
+            if not mpp:
                 raise ValueError("No mpp information available")
-            ds = resolution / self.mpp[0]
+            ds = resolution / mpp
             res = self._read_region_downsample(
                 x_y, ds, tile_size, downsample_base_res, interpolation
             )
@@ -126,22 +118,9 @@ class WSIReader(metaclass=ABCMeta):
             raise ValueError("Invalid value for resolution_unit")
 
         if normalize:
-            res = self._normalize(res)
+            res = _normalize(res)
 
         return res
-
-    def _get_region_coords(
-        self, start: int, tile_size: int, dim_size: int
-    ) -> tuple[int, int, tuple[int, int]]:
-        end = start + tile_size
-        if start >= dim_size or end <= 0:
-            raise ValueError("Region out of image bounds")
-        pad_start = abs(min(start, 0))
-        start += pad_start
-        pad_end = max(end - dim_size, 0)
-        end -= pad_end
-        tile_size = end - start
-        return start, tile_size, (pad_start, pad_end)
 
     def _read_region_level(
         self,
@@ -157,8 +136,8 @@ class WSIReader(metaclass=ABCMeta):
         tile_w_raw, tile_h_raw = tile_size
         width, height = self.level_dimensions[level]
 
-        x, tile_w, pad_w = self._get_region_coords(x_raw, tile_w_raw, width)
-        y, tile_h, pad_h = self._get_region_coords(y_raw, tile_h_raw, height)
+        x, tile_w, pad_w = _get_region_coords(x_raw, tile_w_raw, width)
+        y, tile_h, pad_h = _get_region_coords(y_raw, tile_h_raw, height)
 
         tile = self._read_region((x, y), level, (tile_w, tile_h))
         tile = np.pad(
@@ -230,37 +209,45 @@ class WSIReader(metaclass=ABCMeta):
 
         return self.level_count - 1
 
-    def get_downsampled_slide(
-        self,
-        dims: tuple[int, int],
-        normalize: bool = False,
-        interpolation: Interpolation = Interpolation.BICUBIC,
-    ) -> np.ndarray:
-        """Returns a downsampled version of the slide with the given dimensions.
+    def downsample_dimensions(self, downsample: float) -> tuple[int, int]:
+        """Get slide dimensions for a downsaple factor.
 
         Args:
-            dims (tuple[int, int]): size of the downsampled slide asa (width, height) tuple.
-            normalize (bool, optional): True to normalize the pixel values in therange [0,1]. Defaults to False.
-            interpolation (Interpolation): interpolation method to use for downsampling. Defaults to Interpolation.BICUBIC.
+            downsample (float): the downsample factor.
 
         Returns:
-            np.ndarray: pixel data of the downsampled slide.
+            tuple[int, int]: slide dimensions.
         """
-        downsample = min(a / b for a, b in zip(self.level_dimensions[0], dims))
-        slide_downsampled = self.read_region(
-            (0, 0),
-            downsample,
-            self.downsample_dimensions[downsample],
-            normalize=normalize,
-            resolution_unit=Resolution.DOWNSAMPLE,
-            interpolation=interpolation,
-        )
-        return slide_downsampled
+        try:
+            level = self.level_downsamples.index(downsample)
+            return self.level_dimensions[level]
+        except ValueError:
+            w, h = self.level_dimensions[0]
+            return round(w / downsample), round(h / downsample)
+        
+    def mpp_dimensions(self, mpp: float) -> tuple[int, int]:
+        """Slide dimensions for a mpp value.
+        Args:
+            downsample (float): the downsample factor.
 
-    @cached_property
-    def downsample_dimensions(self) -> Mapping[float, tuple[int, int]]:
-        """A mapping between downsample factors and slide dimensions."""
-        return DownsampleDimensions(self.level_downsamples, self.level_dimensions)
+        Returns:
+            tuple[int, int]: slide dimensions.
+        """
+        if mpp <= 0:
+            raise ValueError("Invalid mpp")
+        mpp_x, mpp_y = self.mpp
+        if mpp_x is None or mpp_y is None:
+            raise ValueError("No mpp information available")
+        ds_w = mpp / mpp_x
+        ds_h = mpp / mpp_y
+        try:
+            if ds_w == ds_h:
+                level = self.level_downsamples.index(ds_w)
+                return self.level_dimensions[level]
+        except ValueError:
+            pass
+        w, h = self.level_dimensions[0]
+        return round(w / ds_w), round(h / ds_h)
 
     @property
     @abstractmethod
@@ -282,7 +269,7 @@ class WSIReader(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def mpp(self) -> tuple[Optional[float], Optional[float]]:
+    def mpp(self) -> tuple[float | None, float | None]:
         """A tuple containing the number of microns per pixel of level 0 in the X and Y dimensions respectively, if known."""
         raise NotImplementedError
 
@@ -308,12 +295,6 @@ class WSIReader(metaclass=ABCMeta):
     @abstractmethod
     def bounds(self) -> dict:
         raise NotImplementedError
-
-    @staticmethod
-    def _normalize(pixels: np.ndarray) -> np.ndarray:
-        if np.issubdtype(pixels.dtype, np.integer):
-            pixels = (pixels / 255).astype(np.float32)
-        return pixels
 
     @abstractmethod
     def __getstate__(self):
