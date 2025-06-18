@@ -36,7 +36,7 @@ class TiffReader(WSIReader):
     def tile_dimensions(self) -> tuple[tuple[int, int], ...]:
         tile_dimensions = []
         for level in range(self.level_count):
-            tile_h, tile_w = self._zarr[level].chunks[:2]
+            tile_h, tile_w = self._zarr[str(level)].chunks[:2]
             tile_dimensions.append((tile_w, tile_h))
         return tuple(tile_dimensions)
 
@@ -45,13 +45,13 @@ class TiffReader(WSIReader):
     ) -> np.ndarray:
         x, y = x_y
         tile_w, tile_h = tile_size
-        return self._zarr[level][y : y + tile_h, x : x + tile_w]
+        return self._zarr[str(level)][y : y + tile_h, x : x + tile_w]
 
     @cached_property
     def level_dimensions(self) -> tuple[tuple[int, int], ...]:
         level_dimensions = []
         for level in range(len(self._zarr)):
-            height, width = self._zarr[level].shape[:2]
+            height, width = self._zarr[str(level)].shape[:2]
             level_dimensions.append((width, height))
         return tuple(level_dimensions)
 
@@ -82,7 +82,7 @@ class TiffReader(WSIReader):
             root = ET.fromstring(page.description)
             namespace_match = re.search("^{.*}", root.tag)
             namespace = namespace_match.group() if namespace_match else ""
-            pixels = list(root.findall(namespace + "Image"))[self._series].find(
+            pixels = list(root.findall(namespace + "Image"))[self.series].find(
                 namespace + "Pixels"
             )
             mpp_x = pixels.get("PhysicalSizeX") if pixels else None
@@ -117,15 +117,15 @@ class TiffReader(WSIReader):
 
     @property
     def dtype(self) -> np.dtype:
-        return self._zarr[0].dtype
+        return self._zarr["0"].dtype
 
     @property
     def n_channels(self) -> int:
-        return self._zarr[0].shape[2]
+        return self._zarr["0"].shape[2]
 
     @cached_property
     def bounds(self) -> dict:
-        height, width = self._zarr[0].shape[:2]
+        height, width = self._zarr["0"].shape[:2]
         bounds = {
             "type": "MultiPolygon", 
             "coordinates": [
