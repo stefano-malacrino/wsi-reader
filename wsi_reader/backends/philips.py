@@ -24,13 +24,16 @@ class _PixelEngineCache:
         for _ in range(size):
             self._queue.put(None)
 
-    def _put(self, pe: PixelEngine) -> None:
+    def _put(self, pe: PixelEngine | None) -> None:
         self._queue.put(pe)
 
     def _get(self) -> PixelEngine:
         pe = self._queue.get()
         if pe is None:
-            pe = PixelEngine(SoftwareRenderBackend(), SoftwareRenderContext())
+            render_backend = SoftwareRenderBackend()
+            render_context = SoftwareRenderContext()
+            render_context.number_of_worker_threads = 1
+            pe = PixelEngine(render_backend, render_context)
             pe["in"].open(*self._pe_args)
             trunc_bits = {0: [0, 0, 0]}
             pe["in"]["WSI"].source_view.truncation(False, False, trunc_bits)
