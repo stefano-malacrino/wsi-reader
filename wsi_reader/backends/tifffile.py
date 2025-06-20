@@ -2,7 +2,6 @@ import numpy as np
 import re
 import tifffile
 import xml.etree.ElementTree as ET
-import zarr
 
 from fractions import Fraction
 from functools import cached_property
@@ -26,32 +25,85 @@ class TiffReader(WSIReader):
         """
         self.series = series
         self.slide = slide
-        self._store = tifffile.imread(slide, aszarr=True, series=series)
-        self._zarr: zarr.Group = zarr.open(self._store, mode="r")
+        self._tiff = tifffile.TiffReader(slide)
 
     def close(self) -> None:
-        self._store.close()
+        self._tiff.close()
 
     @cached_property
     def tile_dimensions(self) -> tuple[tuple[int, int], ...]:
         tile_dimensions = []
         for level in range(self.level_count):
-            tile_h, tile_w = self._zarr[str(level)].chunks[:2]
+            tile_h, tile_w = self._tiff.series[self.series].levels[0].keyframe.chunks[:2]
             tile_dimensions.append((tile_w, tile_h))
         return tuple(tile_dimensions)
 
-    def _read_region(
-        self, x_y: tuple[int, int], level: int, tile_size: tuple[int, int]
-    ) -> np.ndarray:
-        x, y = x_y
-        tile_w, tile_h = tile_size
-        return self._zarr[str(level)][y : y + tile_h, x : x + tile_w]
+    def _read_region(self, x_y: tuple[int, int], level: int, tile_size: tuple[int, int]):
+        page = self._tiff.series[self.series].levels[level].keyframe
+
+        if not page.is_tiled:
+            raise ValueError("Image must be tiled.")
+
+        x_start, y_start = x_y
+        x_end, y_end = x_start + tile_size[0], y_start + tile_size[1]
+
+        tile_x_start, tile_y_start = (
+            x_start // page.tilewidth,
+            y_start // page.tilelength,
+        )
+        tile_x_end, tile_y_end = (x_end - 1) // page.tilewidth + 1, (
+            y_end - 1
+        ) // page.tilelength + 1
+
+        tiles_per_row = page.imagewidth // page.tilewidth + 1
+
+        out = np.zeros(
+            (
+                page.imagedepth,
+                (tile_y_end - tile_y_start) * page.tilelength,
+                (tile_x_end - tile_x_start) * page.tilewidth,
+                page.samplesperpixel,
+            ),
+            dtype=page.dtype,
+        )
+
+        fh = page.parent.filehandle
+
+        for tile_y in range(tile_y_start, tile_y_end):
+            for tile_x in range(tile_x_start, tile_x_end):
+                index = int(tile_y * tiles_per_row + tile_x)
+
+                offset = page.dataoffsets[index]
+                bytecount = page.databytecounts[index]
+
+                if bytecount > 0:
+                    fh.seek(offset)
+                    data = fh.read(bytecount)
+
+                    tile, _, _ = page.decode(
+                        data,
+                        index,
+                        jpegtables=page.jpegtables,
+                        jpegheader=page.jpegheader,
+                    )
+                    out_x_start = (tile_x - tile_x_start) * page.tilewidth
+                    out_y_start = (tile_y - tile_y_start) * page.tilelength
+                    out_x_end = out_x_start + page.tilewidth
+                    out_y_end = out_y_start + page.tilelength
+                    out[:, out_y_start:out_y_end, out_x_start:out_x_end, :] = tile
+
+        out_x_start = x_start - tile_x_start * page.tilewidth
+        out_y_start = y_start - tile_y_start * page.tilelength
+        out_x_end = out_x_start + tile_size[0]
+        out_y_end = out_y_start + tile_size[1]
+
+        return out[0, out_y_start:out_y_end, out_x_start:out_x_end]
 
     @cached_property
     def level_dimensions(self) -> tuple[tuple[int, int], ...]:
         level_dimensions = []
-        for level in range(len(self._zarr)):
-            height, width = self._zarr[str(level)].shape[:2]
+        for level in self._tiff.series[self.series].levels:
+            height, width = level.shape[:2]
             level_dimensions.append((width, height))
         return tuple(level_dimensions)
 
@@ -67,12 +119,12 @@ class TiffReader(WSIReader):
 
     @property
     def level_count(self) -> int:
-        return len(self._zarr)
+        return len(self._tiff.series[self.series].levels)
 
     @cached_property
     def mpp(self) -> tuple[float | None, float | None]:
         mpp: tuple[float | None, float | None] = (None, None)
-        page: tifffile.TiffPage = self._store._data[0].pages[0]
+        page = self._tiff.series[self.series].keyframe
         if page.is_svs:
             metadata = tifffile.tifffile.svs_description_metadata(
                 page.description
@@ -117,15 +169,15 @@ class TiffReader(WSIReader):
 
     @property
     def dtype(self) -> np.dtype:
-        return self._zarr["0"].dtype
+        return self._tiff.series[self.series].dtype
 
     @property
     def n_channels(self) -> int:
-        return self._zarr["0"].shape[2]
+        return self._tiff.series[self.series].shape[2]
 
     @cached_property
     def bounds(self) -> dict:
-        height, width = self._zarr["0"].shape[:2]
+        height, width = self._tiff.series[self.series].shape[:2]
         bounds = {
             "type": "MultiPolygon", 
             "coordinates": [
