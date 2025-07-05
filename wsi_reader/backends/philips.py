@@ -118,9 +118,14 @@ class IsyntaxReader(WSIReader):
         x_end = x_start + round((tile_w - 1) * ds)
         y_end = y_start + round((tile_h - 1) * ds)
         view_range = [x_start, x_end, y_start, y_end, level]
-        tile = np.empty(np.prod(tile_size) * 4, dtype=np.uint8)
         with self._pe_cache.get() as pe:
             view = pe["in"]["WSI"].source_view
+            if view.bits_stored == 9:
+                view = view.add_user_view()
+                matrix_filter = view.add_filter("3x3Matrix16")
+                icc_matrix = pe["in"]["WSI"].icc_matrix
+                view.filter_parameter_matrix3x3(matrix_filter, "matrix3x3", icc_matrix)
+                view.add_filter("Linear16ToSRGB8")
             regions = view.request_regions(
                 [view_range],
                 view.data_envelopes(level),
@@ -128,6 +133,7 @@ class IsyntaxReader(WSIReader):
                 [255, 255, 255, 0],
                 PixelEngine.BufferType.RGBA,
             )
+            tile = np.empty(tile_h * tile_w * 4, dtype=np.uint8)
             (region,) = regions
             pe.wait_all(regions)
             region.get(tile)
