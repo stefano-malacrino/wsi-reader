@@ -1,5 +1,7 @@
+import bisect
 import numpy as np
 
+from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from functools import cached_property
@@ -55,6 +57,56 @@ class _PixelEngineCache:
             yield pe
         finally:
             self._put(pe)
+
+
+def _evm_to_polygons(vertices: list[list[int]]) -> list[list[list[int]]]:
+    if len(vertices) == 0:
+        return []
+
+    rows = defaultdict(list[int])
+    cols = defaultdict(list[int])
+    edges_rows = np.full(len(vertices), -1)
+    edges_cols = np.full(len(vertices), -1)
+
+    for i, (x, y) in enumerate(vertices):
+        bisect.insort(rows[y], i, key=lambda i: vertices[i][0])
+        bisect.insort(cols[x], i, key=lambda i: vertices[i][1])
+
+    for row in rows.values():
+        row_even = row[::2]
+        row_odd = row[1::2]
+        edges_rows[row_even] = row_odd
+        edges_rows[row_odd] = row_even
+
+    for col in cols.values():
+        col_even = col[::2]
+        col_odd = col[1::2]
+        edges_cols[col_even] = col_odd
+        edges_cols[col_odd] = col_even
+
+    polygons = []
+    edges = [edges_rows, edges_cols]
+    edges_idx = 0
+    vertices_left = set(range(len(vertices)))
+    i = 0
+    polygon = []
+
+    while True:
+        try:
+            vertices_left.remove(i)
+        except KeyError:
+            polygon.append(vertices[i])
+            polygons.append(polygon)
+            try:
+                i = vertices_left.pop()
+                polygon = []
+            except KeyError:
+                break
+        polygon.append(vertices[i])
+        i = edges[edges_idx][i]
+        edges_idx ^= 1
+
+    return polygons
 
 
 class IsyntaxReader(WSIReader):
@@ -196,23 +248,16 @@ class IsyntaxReader(WSIReader):
             bounds = {
                 "type": "MultiPolygon",
                 "coordinates": [
-                    [
-                        [
-                            [x_min, y_min],
-                            [x_max, y_min],
-                            [x_max, y_max],
-                            [x_min, y_max],
-                            [x_min, y_min],
-                        ]
-                    ]
-                    for (x_min, x_max, y_min, y_max) in view.data_envelopes(
+                    [coords]
+                    for _, vertices in view.data_envelopes(
                         0
-                    ).as_rectangles()
+                    ).as_extreme_vertices_model()
+                    for coords in _evm_to_polygons(vertices)
                 ],
             }
 
         return bounds
-    
+
     def __eq__(self, other) -> bool:
         return isinstance(other, IsyntaxReader) and self.slide == other.slide
 
